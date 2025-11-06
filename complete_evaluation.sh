@@ -32,7 +32,7 @@ echo ""
 
 # Step 1: Run Docker evaluation with timing
 echo "Step 1/2: Running Docker evaluation..."
-python run_docker_evaluation.py \
+python3 run_docker_evaluation.py \
     --image "$IMAGE_NAME" \
     --test-data ./test_data \
     --output ./output \
@@ -43,7 +43,7 @@ echo ""
 
 # Step 2: Compute metrics
 echo "Step 2/2: Computing metrics..."
-python compute_metrics.py \
+python3 compute_metrics.py \
     --predictions "./output/$PREDICTIONS_FILE" \
     --weights ./weights \
     --output ./output/eval_result.csv
@@ -57,11 +57,11 @@ echo "EVALUATION RESULTS"
 echo "=========================================="
 
 # Extract metrics from JSON and CSV files
-MODEL_NAME=$(python -c "import json; print(json.load(open('./output/timing_results.json')).get('model_name', 'N/A'))" 2>/dev/null || echo "N/A")
-NUM_IMAGES=$(python -c "import json; print(json.load(open('./output/timing_results.json'))['num_test_files'])" 2>/dev/null || echo "N/A")
-TIME_TO_LAST=$(python -c "import json; d=json.load(open('./output/timing_results.json')); print(f\"{d['num_test_files']/d['full_evaluation']['time_to_last_prediction']:.2f}\")" 2>/dev/null || echo "N/A")
-F1_SCORE=$(python -c "import pandas as pd; print(f\"{pd.read_csv('./output/eval_result.csv')['weighted_f1_score'].iloc[0]:.4f}\")" 2>/dev/null || echo "N/A")
-NUM_PARAMS=$(python -c "import pandas as pd; print(f\"{int(pd.read_csv('./output/eval_result.csv')['num_parameters'].iloc[0]):,}\")" 2>/dev/null || echo "N/A")
+MODEL_NAME=$(python3 -c "import json; print(json.load(open('./output/timing_results.json')).get('model_name', 'N/A'))" 2>/dev/null || echo "N/A")
+NUM_IMAGES=$(python3 -c "import json; print(json.load(open('./output/timing_results.json'))['num_test_files'])" 2>/dev/null || echo "N/A")
+TIME_TO_LAST=$(python3 -c "import json; d=json.load(open('./output/timing_results.json')); print(f\"{d['num_test_files']/d['full_evaluation']['time_to_last_prediction']:.2f}\")" 2>/dev/null || echo "N/A")
+F1_SCORE=$(python3 -c "import pandas as pd; print(f\"{pd.read_csv('./output/eval_result.csv')['weighted_f1_score'].iloc[0]:.4f}\")" 2>/dev/null || echo "N/A")
+NUM_PARAMS=$(python3 -c "import pandas as pd; print(f\"{int(pd.read_csv('./output/eval_result.csv')['num_parameters'].iloc[0]):,}\")" 2>/dev/null || echo "N/A")
 
 echo "Model Name: $MODEL_NAME"
 echo "Number of Test Images: $NUM_IMAGES"
