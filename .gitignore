@@ -40,3 +40,5 @@ output/timing_results.json
 weights/*.pth
 weights/*.pt
 
+
+haze-detection/

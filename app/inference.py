@@ -11,7 +11,8 @@ from transformers import ViTForImageClassification
 import numpy as np
 
 # Class mapping for HacX dataset (matches training encoding)
-CLASS_MAPPING = ['smoke', 'haze', 'normal']  # 0=smoke, 1=haze, 2=normal
+# Training uses LabelEncoder with sorted(['haze', 'normal', 'smoke'])
+CLASS_MAPPING = ['haze', 'normal', 'smoke']  # 0=haze, 1=normal, 2=smoke
 
 def get_transforms(image_size=384):
     """Get transforms for preprocessing."""
@@ -78,15 +79,16 @@ def get_actual_class_from_filename(filename):
     """Extract actual class from filename based on naming convention (matches training encoding)."""
     filename_lower = filename.lower()
 
-    # Check for smoke/wildfire
-    if 'smoke' in filename_lower or 'wildfire' in filename_lower:
-        return 0  # smoke
+    # Match training encoding: 0=haze, 1=normal, 2=smoke
     # Check for haze
-    elif 'haze' in filename_lower:
-        return 1  # haze
+    if 'haze' in filename_lower:
+        return 0  # haze
+    # Check for smoke/wildfire
+    elif 'smoke' in filename_lower or 'wildfire' in filename_lower:
+        return 2  # smoke
     # Everything else is normal (cloud, land, seaside, dust)
     else:
-        return 2  # normal
+        return 1  # normal
 
 def process_image(image_path, transform, device):
     """Process a single image and return prediction."""
