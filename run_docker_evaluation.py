@@ -18,6 +18,7 @@ import json
 from pathlib import Path
 import threading
 import csv
+import torch
 
 
 def get_test_files(test_data_dir):
