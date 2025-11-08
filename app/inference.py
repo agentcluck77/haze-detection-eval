@@ -1,217 +1,198 @@
-#!/usr/bin/env python3
-"""
-Inference script for satellite image classification.
-Processes all .tif files from input directory and writes predictions to CSV.
-"""
-
 import os
-import sys
-import glob
-import argparse
-import csv
-from pathlib import Path
 import torch
-from transformers import ViTForImageClassification
+import torch.nn.functional as F
 from PIL import Image
 import torchvision.transforms as transforms
-from tqdm import tqdm
+import pandas as pd
+import argparse
+from pathlib import Path
+import time
+from transformers import ViTForImageClassification
+import numpy as np
 
-
-# Class mapping based on filename prefixes
-CLASS_MAPPING = {
-    'smoke': 0,
-    'wildfire': 0,  # wildfire is also smoke
-    'haze': 1,
-    'cloud': 2,
-    'land': 2,
-    'seaside': 2,
-    'dust': 2,
-    'normal': 2
-}
-
-
-def get_actual_class_from_filename(filename):
-    """Extract actual class from filename prefix."""
-    basename = os.path.basename(filename)
-    prefix = basename.split('_')[0].lower()
-
-    # Handle special cases
-    if prefix == 'wildfire':
-        return 0  # smoke
-
-    return CLASS_MAPPING.get(prefix, 2)  # default to normal (2)
-
+# Class mapping for HacX dataset (matches training encoding)
+CLASS_MAPPING = ['haze', 'normal', 'smoke']  # 0=haze, 1=normal, 2=smoke
 
 def get_transforms(image_size=384):
-    """Get validation transforms for inference."""
+    """Get transforms for preprocessing."""
     return transforms.Compose([
         transforms.Resize((image_size, image_size)),
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     ])
 
-
 def load_model(model_path, device):
-    """Load the trained model."""
-    print(f"Loading model from: {model_path}")
-
+    """Load the trained model (detects architecture from checkpoint)."""
+    # If directory, find the model file
+    if os.path.isdir(model_path):
+        model_files = [f for f in os.listdir(model_path) if f.endswith(('.pth', '.pt', '.pkl'))]
+        if not model_files:
+            raise FileNotFoundError(f"No model files found in {model_path}")
+        model_path = os.path.join(model_path, model_files[0])
+    
+    print(f"Loading model from {model_path}")
+    
     # Load checkpoint
-    checkpoint = torch.load(model_path, map_location=device, weights_only=False)
-
-    # Extract config if available
-    config = checkpoint.get('config', {})
-    model_config = config.get('model', {})
-    model_name = model_config.get('name', 'google/vit-base-patch16-384')
-    num_labels = 3  # smoke, haze, normal
-
-    print(f"Model architecture: {model_name}")
-
-    # Load model
-    model = ViTForImageClassification.from_pretrained(
-        model_name,
-        num_labels=num_labels,
-        ignore_mismatched_sizes=True
-    )
-
-    # Load state dict
+    checkpoint = torch.load(model_path, map_location=device)
+    
+    # Extract state dict
     if 'model_state_dict' in checkpoint:
         state_dict = checkpoint['model_state_dict']
-    elif 'state_dict' in checkpoint:
-        state_dict = checkpoint['state_dict']
     else:
         state_dict = checkpoint
-
-    model.load_state_dict(state_dict)
-    model = model.to(device)
+    
+    # Detect model architecture from state dict keys
+    if any('vit.' in key for key in state_dict.keys()):
+        print("Detected ViT architecture")
+        model = ViTForImageClassification.from_pretrained(
+            'google/vit-base-patch16-384',
+            num_labels=3,
+            ignore_mismatched_sizes=True
+        )
+    elif any('convnext.' in key for key in state_dict.keys()):
+        print("Detected ConvNeXt architecture")
+        from transformers import ConvNextForImageClassification
+        model = ConvNextForImageClassification.from_pretrained(
+            'facebook/convnext-base-224-22k',
+            num_labels=3,
+            ignore_mismatched_sizes=True
+        )
+    else:
+        print("Unknown architecture, defaulting to ViT")
+        model = ViTForImageClassification.from_pretrained(
+            'google/vit-base-patch16-384',
+            num_labels=3,
+            ignore_mismatched_sizes=True
+        )
+    
+    # Load state dict
+    model.load_state_dict(state_dict, strict=False)
+    
+    model.to(device)
     model.eval()
-
-    print(f"Model loaded successfully on {device}")
+    
+    print("Model loaded successfully")
     return model
 
+def get_actual_class_from_filename(filename):
+    """Extract actual class from filename based on naming convention (matches training encoding)."""
+    filename_lower = filename.lower()
+    
+    # Check for haze
+    if 'haze' in filename_lower:
+        return 0  # haze
+    # Check for smoke/wildfire
+    elif 'smoke' in filename_lower or 'wildfire' in filename_lower:
+        return 2  # smoke
+    # Everything else is normal (cloud, land, seaside, dust)
+    else:
+        return 1  # normal
 
-def run_inference(model, test_dir, output_csv, device, image_size=384):
-    """Run inference on all test images and save predictions to CSV."""
+def process_image(image_path, transform, device):
+    """Process a single image and return prediction."""
+    try:
+        # Load and preprocess image
+        image = Image.open(image_path).convert('RGB')
+        image_tensor = transform(image).unsqueeze(0).to(device)
+        
+        return image_tensor
+    except Exception as e:
+        print(f"Error processing {image_path}: {e}")
+        return None
 
-    # Get all .tif files
-    test_files = sorted(glob.glob(os.path.join(test_dir, '*.tif')))
-
-    if not test_files:
-        print(f"Error: No .tif files found in {test_dir}")
-        sys.exit(1)
-
-    print(f"Found {len(test_files)} test images")
-
+def run_inference(model, test_data_dir, output_file, device):
+    """Run inference on all test images."""
+    print(f"Running inference on images in {test_data_dir}")
+    
     # Get transforms
-    transform = get_transforms(image_size)
-
-    # Prepare output directory
-    os.makedirs(os.path.dirname(output_csv), exist_ok=True)
-
-    # Open CSV file for writing
-    with open(output_csv, 'w', newline='') as csvfile:
-        writer = csv.writer(csvfile)
-        writer.writerow(['file_name', 'predicted_class', 'actual_class'])
-
-        # Process each image
-        print("Running inference...")
+    transform = get_transforms()
+    
+    # Find all .tif files
+    test_files = list(Path(test_data_dir).glob('*.tif'))
+    if not test_files:
+        # Search recursively in subdirectories
+        test_files = list(Path(test_data_dir).rglob('*.tif'))
+    
+    if not test_files:
+        print(f"No .tif files found in {test_data_dir}")
+        return
+    
+    print(f"Found {len(test_files)} test images")
+    
+    # Prepare results list
+    results = []
+    
+    # Process each image
+    for i, image_path in enumerate(test_files):
+        filename = image_path.name
+        
+        # Process image
+        image_tensor = process_image(image_path, transform, device)
+        if image_tensor is None:
+            continue
+        
+        # Run inference
         with torch.no_grad():
-            for img_path in tqdm(test_files, desc="Processing images"):
-                try:
-                    # Load and preprocess image
-                    image = Image.open(img_path).convert('RGB')
-                    pixel_values = transform(image).unsqueeze(0).to(device)
-
-                    # Run inference
-                    outputs = model(pixel_values=pixel_values)
-                    predicted_class = torch.argmax(outputs.logits, dim=1).item()
-
-                    # Get actual class from filename
-                    filename = os.path.basename(img_path)
-                    actual_class = get_actual_class_from_filename(filename)
-
-                    # Write to CSV
-                    writer.writerow([filename, predicted_class, actual_class])
-
-                    # Flush after each write to ensure real-time updates
-                    csvfile.flush()
-
-                except Exception as e:
-                    print(f"Error processing {img_path}: {e}")
-                    continue
-
-    print(f"Predictions saved to: {output_csv}")
-
+            outputs = model(pixel_values=image_tensor)
+            logits = outputs.logits
+            probabilities = F.softmax(logits, dim=1)
+            predicted_class = torch.argmax(probabilities, dim=1).item()
+        
+        # Get actual class from filename
+        actual_class = get_actual_class_from_filename(filename)
+        
+        # Store result
+        results.append({
+            'file_name': filename,
+            'predicted_class': predicted_class,
+            'actual_class': actual_class
+        })
+        
+        # Save results incrementally
+        if i % 10 == 0 or i == len(test_files) - 1:
+            df = pd.DataFrame(results)
+            df.to_csv(output_file, index=False)
+            print(f"Processed {i+1}/{len(test_files)} images")
+    
+    print(f"Inference complete. Results saved to {output_file}")
+    return results
 
 def main():
-    parser = argparse.ArgumentParser(
-        description='Run inference on satellite images'
-    )
-    parser.add_argument(
-        '--model-path',
-        type=str,
-        default='/app/weights/best_model.pth',
-        help='Path to model checkpoint'
-    )
-    parser.add_argument(
-        '--test-dir',
-        type=str,
-        default='/data/test',
-        help='Directory containing test images'
-    )
-    parser.add_argument(
-        '--output',
-        type=str,
-        default='/data/output/predictions.csv',
-        help='Output CSV file path'
-    )
-    parser.add_argument(
-        '--image-size',
-        type=int,
-        default=384,
-        help='Input image size'
-    )
-    parser.add_argument(
-        '--device',
-        type=str,
-        default='cuda',
-        help='Device to use (cuda or cpu)'
-    )
-
+    parser = argparse.ArgumentParser(description='Run inference with ViT model')
+    parser.add_argument('--model', type=str, default='/app/weights/best_model.pth',
+                       help='Path to trained model weights directory or file')
+    parser.add_argument('--test-data', type=str, default='/data/test',
+                       help='Directory containing test images')
+    parser.add_argument('--output', type=str, default='/data/output/predictions.csv',
+                       help='Output CSV file for predictions')
+    parser.add_argument('--batch-size', type=int, default=1,
+                       help='Batch size for inference')
+    
     args = parser.parse_args()
-
+    
     # Set device
-    if args.device == 'cuda' and not torch.cuda.is_available():
-        print("CUDA not available, falling back to CPU")
-        device = torch.device('cpu')
-    else:
-        device = torch.device(args.device)
-
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
-
-    # Check if model exists
-    if not os.path.exists(args.model_path):
-        print(f"Error: Model file not found at {args.model_path}")
-        sys.exit(1)
-
-    # Check if test directory exists
-    if not os.path.exists(args.test_dir):
-        print(f"Error: Test directory not found at {args.test_dir}")
-        sys.exit(1)
-
+    
     # Load model
-    model = load_model(args.model_path, device)
-
+    model = load_model(args.model, device)
+    
+    # Create output directory
+    os.makedirs(os.path.dirname(args.output), exist_ok=True)
+    
     # Run inference
-    run_inference(
-        model=model,
-        test_dir=args.test_dir,
-        output_csv=args.output,
-        device=device,
-        image_size=args.image_size
-    )
-
-    print("Inference completed successfully!")
-
+    start_time = time.time()
+    results = run_inference(model, args.test_data, args.output, device)
+    end_time = time.time()
+    
+    if results:
+        print(f"\nProcessed {len(results)} images in {end_time - start_time:.2f} seconds")
+        print(f"Average time per image: {(end_time - start_time) / len(results):.4f} seconds")
+        
+        # Calculate accuracy
+        correct = sum(1 for r in results if r['predicted_class'] == r['actual_class'])
+        accuracy = correct / len(results)
+        print(f"Accuracy: {accuracy:.4f} ({correct}/{len(results)})")
 
 if __name__ == '__main__':
     main()

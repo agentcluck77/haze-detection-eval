@@ -12,8 +12,8 @@ if [ -z "$1" ]; then
     echo "Complete Docker Evaluation Pipeline"
     echo "=========================================="
     echo ""
-    read -p "Enter Docker image name (default: satellite-classifier:latest): " IMAGE_NAME
-    IMAGE_NAME="${IMAGE_NAME:-satellite-classifier:latest}"
+    read -p "Enter Docker image name (default: haze-classifier:latest): " IMAGE_NAME
+    IMAGE_NAME="${IMAGE_NAME:-haze-classifier:latest}"
     
     read -p "Enter predictions CSV filename (default: predictions.csv): " PREDICTIONS_FILE
     PREDICTIONS_FILE="${PREDICTIONS_FILE:-predictions.csv}"
@@ -43,7 +43,7 @@ echo ""
 
 # Step 2: Compute metrics
 echo "Step 2/2: Computing metrics..."
-python3 compute_metrics.py \
+source eval/bin/activate && python3 compute_metrics.py \
     --predictions "./output/$PREDICTIONS_FILE" \
     --weights ./weights \
     --output ./output/eval_result.csv

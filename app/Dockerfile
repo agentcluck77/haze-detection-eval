@@ -1,31 +1,33 @@
-# Use PyTorch base image with CUDA support
-FROM pytorch/pytorch:2.1.0-cuda11.8-cudnn8-runtime
+# Multi-stage build for faster builds
+FROM python:3.9-slim as base
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    libxrender-dev \
+    libgomp1 \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
 
 # Set working directory
 WORKDIR /app
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    libgl1-mesa-glx \
-    libglib2.0-0 \
-    && rm -rf /var/lib/apt/lists/*
-
-# Copy requirements and install Python dependencies
+# Copy requirements first for better caching
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy inference script
+# Install uv for faster package installation
+RUN pip install --no-cache-dir uv
+
+# Install Python dependencies with uv
+RUN uv pip install --no-cache-dir --system -r requirements.txt
+
+# Copy application code
 COPY inference.py .
 
-# Create directories for weights and data
-RUN mkdir -p /app/weights /data/test /data/output
+# Create output directory
+RUN mkdir -p /data/output
 
-# Set environment variables
-ENV PYTHONUNBUFFERED=1
-
-# Default command - runs inference
-CMD ["python", "inference.py", \
-     "--model-path", "/app/weights/best_model.pth", \
-     "--test-dir", "/data/test", \
-     "--output", "/data/output/predictions.csv", \
-     "--image-size", "384"]
+# Default command
+CMD ["python", "inference.py"]
