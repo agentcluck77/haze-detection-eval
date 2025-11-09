@@ -1,8 +1,5 @@
 !app/.gitkeep
 
-# Ignore all .tif files
-*.tif
-
 # Python
 __pycache__/
 *.py[cod]
@@ -33,7 +30,7 @@ ENV/
 .DS_Store
 Thumbs.db
 
-Model outputs (optional - uncomment if you want to ignore these)
+# Model outputs (optional - uncomment if you want to ignore these)
 output/predictions.csv
 output/eval_result.csv
 output/timing_results.json
@@ -41,4 +38,5 @@ weights/*.pth
 weights/*.pt
 
 
-haze-detection/
+
+
